@@ -1171,6 +1171,16 @@ static enum hrtimer_restart ncm_tx_timeout(struct hrtimer *data)
 		ncm->netdev->netdev_ops->ndo_start_xmit(NULL, ncm->netdev);
 
 		ncm->timer_force_tx = false;
+
+		/* No free USB request: the NTB is still pending. The timer is
+		 * only armed when a new NTB starts, so without this the
+		 * datagrams already in it waited until it filled up, which
+		 * with sparse traffic (games, VoIP) could take seconds.
+		 */
+		if (!ncm->timer_stopping && ncm->skb_tx_data) {
+			hrtimer_forward_now(data, TX_TIMEOUT_NSECS);
+			return HRTIMER_RESTART;
+		}
 	}
 	return HRTIMER_NORESTART;
 }

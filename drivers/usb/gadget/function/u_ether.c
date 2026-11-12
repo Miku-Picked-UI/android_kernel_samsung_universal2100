@@ -577,16 +577,29 @@ static int tx_task(struct eth_dev *dev, struct usb_request *req)
 	}
 	req->length = length;
 
-	/* throttle highspeed IRQ rate back slightly */
+	/* throttle highspeed IRQ rate back slightly
+	 *
+	 * tx_task() also runs from the NCM and RNDIS flush timers, outside the
+	 * netdev TX lock, so the counter is updated under req_lock. It used
+	 * to be compared with "==": a racing increment skipped the value,
+	 * no request asked for a completion interrupt again, none of them
+	 * came back to the freelist and TX stalled for good. Also always ask
+	 * for the interrupt for the last free request, so the freelist can
+	 * never drain with every queued request waiting silently.
+	 */
 	if (gadget_is_dualspeed(dev->gadget) &&
 		(dev->gadget->speed == USB_SPEED_HIGH)) {
-		g_rndis_mp->tx_qlen++;
-		if (g_rndis_mp->tx_qlen == (dev->qmult/2)) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&dev->req_lock, flags);
+		if (++g_rndis_mp->tx_qlen >= (dev->qmult/2) ||
+		    list_empty(&dev->tx_reqs)) {
 			req->no_interrupt = 0;
 			g_rndis_mp->tx_qlen = 0;
 		} else {
 			req->no_interrupt = 1;
 		}
+		spin_unlock_irqrestore(&dev->req_lock, flags);
 	} else {
 		req->no_interrupt = 0;
 	}
@@ -724,8 +737,18 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	req = list_first_entry(&dev->tx_reqs, struct usb_request, list);
 	list_del(&req->list);
 
-	/* temporarily stop TX queue when the freelist empties */
-	if (list_empty(&dev->tx_reqs) && (g_rndis_mp->tx_skb_hold_count >= (g_rndis_mp->dl_max_pkts_per_xfer -1)))
+	/* temporarily stop TX queue when the freelist empties
+	 *
+	 * Only RNDIS multi packet transfers may keep the queue running with
+	 * an empty freelist (the request is put back while frames are held).
+	 * For everything else (NCM, single packet RNDIS) dl_max_pkts_per_xfer
+	 * is 0, "0 - 1" wrapped to UINT_MAX and the queue was never stopped:
+	 * the stack then retried NETDEV_TX_BUSY in a tight loop.
+	 */
+	if (list_empty(&dev->tx_reqs) &&
+	    (!g_rndis_mp->multi_pkt_xfer ||
+	     g_rndis_mp->tx_skb_hold_count + 1 >=
+			(int)g_rndis_mp->dl_max_pkts_per_xfer))
 		netif_stop_queue(net);
 	spin_unlock_irqrestore(&dev->req_lock, flags);
 
