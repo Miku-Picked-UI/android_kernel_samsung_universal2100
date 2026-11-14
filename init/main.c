@@ -208,6 +208,28 @@ static void __init apply_mali_version_default(void)
 		strscpy(mali_selected_version, val + 1, sizeof(mali_selected_version));
 }
 
+/*
+ * Report the selected KMD to Android: append androidboot.mali_version=<ver> to
+ * the command line /proc/cmdline shows, which init turns into
+ * ro.boot.mali_version. The device's init.mali.rc mounts the matching
+ * userspace driver from it, and Settings shows the active driver.
+ */
+static void __init report_mali_version(void)
+{
+	static const char key[] = " androidboot.mali_version=";
+	size_t len;
+	char *buf;
+
+	if (!mali_selected_version[0])
+		return;
+	len = strlen(saved_command_line) + sizeof(key) + strlen(mali_selected_version);
+	buf = memblock_alloc(len, SMP_CACHE_BYTES);
+	if (!buf)
+		return;
+	snprintf(buf, len, "%s%s%s", saved_command_line, key, mali_selected_version);
+	saved_command_line = buf;
+}
+
 static const char *argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
 const char *envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
 static const char *panic_later, *panic_param;
@@ -916,6 +938,7 @@ asmlinkage __visible void __init start_kernel(void)
 			   NULL, 0, -1, -1, NULL, set_init_arg);
 
 	apply_mali_version_default();
+	report_mali_version();
 
 	/*
 	 * These use large bootmem allocations and must precede
