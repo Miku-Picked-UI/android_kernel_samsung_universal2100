@@ -159,4 +159,32 @@ extern int do_execveat(int, struct filename *,
 		       int);
 int do_execve_file(struct file *file, void *__argv, void *__envp);
 
+/*
+ * FlopKernel can block vendor frequency controllers (perfd, argosd, ...)
+ * from locking CPU/GPU clocks. That feature is not ported; FlopKernel's
+ * Exynos GPU layer (drivers/gpu/arm/exynos) still asks, so answer as
+ * FlopKernel does with the blocking switched off: nothing is blocked and
+ * the enable hook never fires. The GPU sysfs locks behave as stock.
+ */
+static inline bool freq_control_blocking_enabled(void) { return false; }
+static inline bool min_freq_control_blocking_enabled(void) { return false; }
+static inline int freq_control_register_enable_hook(void (*hook)(void)) { return 0; }
+static inline void freq_control_unregister_enable_hook(void (*hook)(void)) { }
+
+static inline bool task_controls_frequencies_with_throttlers_protection(
+	struct task_struct *tsk, bool respect_throttlers_protection)
+{
+	return false;
+}
+
+static inline bool task_controls_frequencies(struct task_struct *tsk)
+{
+	return false;
+}
+
+static inline bool task_controls_min_frequencies(struct task_struct *tsk)
+{
+	return false;
+}
+
 #endif /* _LINUX_BINFMTS_H */
