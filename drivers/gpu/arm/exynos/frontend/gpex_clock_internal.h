@@ -32,8 +32,10 @@ typedef struct _gpu_clock_info {
 } gpu_clock_info;
 
 struct _clock_info {
-	struct kbase_device *kbdev;
+	struct device *dev;
 	int gpu_max_clock;
+	int gpu_stock_max_clock;
+	int gpu_unlock_max_clock;
 	int gpu_min_clock;
 	int gpu_max_clock_limit;
 	int boot_clock; // was known as gpu_dvfs_start_clock
@@ -49,11 +51,13 @@ struct _clock_info {
 	int user_min_lock[NUMBER_LOCK];
 	int user_max_lock_input;
 	int user_min_lock_input;
+	int gpu_clamp_input;
 
 	u64 prev_time_in_state_time;
 };
 
 int gpex_clock_sysfs_init(struct _clock_info *_clk_info);
+void gpex_reset_user_max_lock(void);
 
 int gpex_clock_update_time_in_state(int clock);
 int gpex_clock_init_time_in_state(void);

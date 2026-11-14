@@ -18,10 +18,12 @@
  * http://www.gnu.org/licenses/gpl-2.0.html.
  */
 
+#include <linux/export.h>
 #include <linux/version.h>
 #include <linux/device.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
+#include <linux/binfmts.h>
 
 #include <gpexbe_devicetree.h>
 #include <gpex_utils.h>
@@ -93,10 +95,20 @@ static int gpex_qos_get_table_idx(int clock)
 
 int gpex_qos_set(gpex_qos_flag flags, int val)
 {
+	bool respect_throttlers_protection;
+
 	if (!qos_info.is_pm_qos_init) {
 		GPU_LOG(MALI_EXYNOS_ERROR, "%s: PM QOS ERROR : pm_qos not initialized\n", __func__);
 		return -ENOENT;
 	}
+
+	respect_throttlers_protection =
+		gpex_clock_get_max_clock() != gpex_clock_get_unlock_max_clock();
+
+	if (task_controls_frequencies_with_throttlers_protection(current,
+								   respect_throttlers_protection) &&
+	    (flags & PMQOS_MAX))
+		return 0;
 
 	gpexbe_qos_request_update((mali_pmqos_flags)flags, val);
 
@@ -111,6 +123,7 @@ int gpex_qos_unset(gpex_qos_flag flags)
 		GPU_LOG(MALI_EXYNOS_ERROR, "%s: PM QOS ERROR : pm_qos not initialized\n", __func__);
 		return -ENOENT;
 	}
+
 	gpexbe_qos_request_unset((mali_pmqos_flags)flags);
 
 	/* TODO: record PMQOS state somewhere */
@@ -293,3 +306,4 @@ int gpex_qos_set_from_clock(int gpu_clock)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(gpex_qos_set_from_clock);

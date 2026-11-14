@@ -18,11 +18,12 @@
  * http://www.gnu.org/licenses/gpl-2.0.html.
  */
 
+#include <linux/types.h>
 #include <gpex_dvfs.h>
 #include <gpex_clock.h>
 #include <gpex_pm.h>
 
-#include <mali_exynos_if.h>
+#include <linux/mali_exynos_if.h>
 
 #include "gpex_dvfs_internal.h"
 static struct dvfs_info *dvfs;
@@ -84,6 +85,18 @@ int gpu_dvfs_get_max_freq(void)
 }
 EXPORT_SYMBOL_GPL(gpu_dvfs_get_max_freq);
 
+int gpu_dvfs_get_stock_max_freq(void)
+{
+	return gpex_clock_get_stock_max_clock();
+}
+EXPORT_SYMBOL_GPL(gpu_dvfs_get_stock_max_freq);
+
+int gpu_dvfs_get_max_cooling_freq(void)
+{
+	return gpex_clock_get_unlock_max_clock();
+}
+EXPORT_SYMBOL_GPL(gpu_dvfs_get_max_cooling_freq);
+
 int gpu_dvfs_get_max_locked_freq(void)
 {
 	unsigned long flags;
@@ -94,6 +107,9 @@ int gpu_dvfs_get_max_locked_freq(void)
 	if (locked_clock <= 0)
 		locked_clock = gpex_clock_get_max_clock();
 	gpex_dvfs_spin_unlock(&flags);
+
+	if (locked_clock > gpex_clock_get_max_clock())
+		locked_clock = gpex_clock_get_max_clock();
 
 	return locked_clock;
 }

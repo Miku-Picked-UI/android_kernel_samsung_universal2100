@@ -186,6 +186,28 @@ static int __init set_reset_devices(char *str)
 
 __setup("reset_devices", set_reset_devices);
 
+/*
+ * Mali KMD version selector (from FlopKernel). Every versioned Mali driver
+ * module (mali_kbase_rXXpY) checks this in its init and only binds to the GPU
+ * if it is the selected one. The value comes from the token below, which is
+ * baked into the kernel image and applied after the command line is parsed:
+ * Miku-Picked UI's GPU driver switch patches these five characters in the boot
+ * partition (as FloppyCompanion does), so keep the token's length and form.
+ * The default, r38p0, is the stock driver that matches the stock userspace.
+ */
+char mali_selected_version[8] = "r38p0";
+EXPORT_SYMBOL(mali_selected_version);
+static char mali_selected_version_arg[] = "mali.version=r38p0";
+
+static void __init apply_mali_version_default(void)
+{
+	char *val;
+
+	val = strchr(mali_selected_version_arg, '=');
+	if (val)
+		strscpy(mali_selected_version, val + 1, sizeof(mali_selected_version));
+}
+
 static const char *argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
 const char *envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
 static const char *panic_later, *panic_param;
@@ -892,6 +914,8 @@ asmlinkage __visible void __init start_kernel(void)
 	if (extra_init_args)
 		parse_args("Setting extra init args", extra_init_args,
 			   NULL, 0, -1, -1, NULL, set_init_arg);
+
+	apply_mali_version_default();
 
 	/*
 	 * These use large bootmem allocations and must precede

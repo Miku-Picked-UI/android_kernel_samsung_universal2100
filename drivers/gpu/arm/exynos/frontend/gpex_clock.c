@@ -18,7 +18,9 @@
  * http://www.gnu.org/licenses/gpl-2.0.html.
  */
 
+#include <linux/export.h>
 #include <linux/slab.h>
+#include <linux/binfmts.h>
 
 #include <gpex_clock.h>
 #include <gpex_qos.h>
@@ -45,6 +47,14 @@ int gpex_clock_get_max_clock(void)
 {
 	return clk_info.gpu_max_clock;
 }
+int gpex_clock_get_stock_max_clock(void)
+{
+	return clk_info.gpu_stock_max_clock;
+}
+int gpex_clock_get_unlock_max_clock(void)
+{
+	return clk_info.gpu_unlock_max_clock;
+}
 int gpex_clock_get_max_clock_limit(void)
 {
 	return clk_info.gpu_max_clock_limit;
@@ -57,6 +67,7 @@ int gpex_clock_get_cur_clock(void)
 {
 	return clk_info.cur_clock;
 }
+EXPORT_SYMBOL_GPL(gpex_clock_get_cur_clock);
 int gpex_clock_get_max_lock(void)
 {
 	return clk_info.max_lock;
@@ -83,7 +94,13 @@ static int gpex_clock_update_config_data_from_dt(void)
 	int asv_lv_num;
 	int i, j;
 
-	clk_info.gpu_max_clock = gpexbe_devicetree_get_int(gpu_max_clock);
+	clk_info.gpu_unlock_max_clock = gpexbe_devicetree_get_int(gpu_max_clock);
+	clk_info.gpu_stock_max_clock = gpexbe_devicetree_get_int(gpu_stock_max_clock);
+	if (!clk_info.gpu_stock_max_clock ||
+	    clk_info.gpu_stock_max_clock > clk_info.gpu_unlock_max_clock)
+		clk_info.gpu_stock_max_clock = clk_info.gpu_unlock_max_clock;
+	/* Miku-Picked UI: FlopKernel's overclock mode is not ported; stock maximum. */
+	clk_info.gpu_max_clock = clk_info.gpu_stock_max_clock;
 	clk_info.gpu_min_clock = gpexbe_devicetree_get_int(gpu_min_clock);
 	clk_info.boot_clock = gpexbe_clock_get_boot_freq();
 	clk_info.gpu_max_clock_limit = gpexbe_clock_get_max_freq();
@@ -107,7 +124,8 @@ static int gpex_clock_update_config_data_from_dt(void)
 		int cal_vol = fv_array[i].volt;
 		dt_clock_item *dt_clock_table = gpexbe_devicetree_get_clock_table();
 
-		if (cal_freq <= clk_info.gpu_max_clock && cal_freq >= clk_info.gpu_min_clock) {
+		if (cal_freq <= clk_info.gpu_unlock_max_clock &&
+		    cal_freq >= clk_info.gpu_min_clock) {
 			for (j = 0; j < clk_info.table_size; j++) {
 				if (cal_freq == dt_clock_table[j].clock) {
 					clk_info.table[j].clock = cal_freq;
@@ -285,6 +303,9 @@ static int gpu_check_target_clock(int clock)
 	if (gpex_clock_get_table_idx(target_clock) < 0)
 		return -1;
 
+	if (target_clock > gpex_clock_get_max_clock())
+		target_clock = gpex_clock_get_max_clock();
+
 	if (!gpex_dvfs_get_status())
 		return target_clock;
 
@@ -298,10 +319,49 @@ static int gpu_check_target_clock(int clock)
 	if ((clk_info.max_lock > 0) && (target_clock > clk_info.max_lock))
 		target_clock = clk_info.max_lock;
 
+	if (target_clock > gpex_clock_get_max_clock())
+		target_clock = gpex_clock_get_max_clock();
+
 	/* TODO: I don't think this required as it is set in gpex_dvfs_set_clock_callback */
 	//gpex_dvfs_set_step(gpex_clock_get_table_idx(target_clock));
 
 	return target_clock;
+}
+
+static void gpex_clock_recompute_max_lock_locked(void)
+{
+	int i;
+	bool dirty = false;
+
+	clk_info.max_lock = clk_info.gpu_max_clock;
+
+	for (i = 0; i < NUMBER_LOCK; i++) {
+		if (clk_info.user_max_lock[i] > 0) {
+			dirty = true;
+			clk_info.max_lock = MIN(clk_info.max_lock, clk_info.user_max_lock[i]);
+		}
+	}
+
+	if (!dirty)
+		clk_info.max_lock = 0;
+}
+
+static void gpex_clock_recompute_min_lock_locked(void)
+{
+	int i;
+	bool dirty = false;
+
+	clk_info.min_lock = clk_info.gpu_min_clock;
+
+	for (i = 0; i < NUMBER_LOCK; i++) {
+		if (clk_info.user_min_lock[i] > 0) {
+			dirty = true;
+			clk_info.min_lock = MAX(clk_info.min_lock, clk_info.user_min_lock[i]);
+		}
+	}
+
+	if (!dirty)
+		clk_info.min_lock = 0;
 }
 
 /*******************************************************
@@ -312,9 +372,10 @@ int gpex_clock_init(struct device **dev)
 	int i = 0;
 
 	mutex_init(&clk_info.clock_lock);
-	clk_info.kbdev = container_of(dev, struct kbase_device, dev);
+	clk_info.dev = dev ? *dev : NULL;
 	clk_info.max_lock = 0;
 	clk_info.min_lock = 0;
+	clk_info.gpu_clamp_input = 0;
 
 	for (i = 0; i < NUMBER_LOCK; i++) {
 		clk_info.user_max_lock[i] = 0;
@@ -333,8 +394,10 @@ int gpex_clock_init(struct device **dev)
 
 void gpex_clock_term(void)
 {
+	freq_control_unregister_enable_hook(gpex_reset_user_max_lock);
+
 	/* TODO: reset other clk_info variables too */
-	clk_info.kbdev = NULL;
+	clk_info.dev = NULL;
 }
 
 int gpex_clock_get_table_idx(int clock)
@@ -404,6 +467,48 @@ int gpex_clock_set(int clk)
 	return ret;
 }
 
+int gpex_clock_set_runtime_max_clock(int clk)
+{
+	unsigned long flags;
+	int target_clk = 0;
+	int prev_max_clock = 0;
+	bool update_clock = false;
+
+	if (gpex_clock_get_table_idx(clk) < 0)
+		return -EINVAL;
+
+	mutex_lock(&clk_info.clock_lock);
+
+	if (clk_info.gpu_max_clock == clk) {
+		mutex_unlock(&clk_info.clock_lock);
+		return 0;
+	}
+
+	prev_max_clock = clk_info.gpu_max_clock;
+	clk_info.gpu_max_clock = clk;
+
+	gpex_dvfs_spin_lock(&flags);
+
+	gpex_clock_recompute_max_lock_locked();
+	gpex_clock_recompute_min_lock_locked();
+
+	if (clk_info.cur_clock > clk) {
+		target_clk = clk;
+		update_clock = true;
+	} else if (clk > prev_max_clock && clk_info.cur_clock == prev_max_clock) {
+		target_clk = clk;
+		update_clock = true;
+	}
+
+	gpex_dvfs_spin_unlock(&flags);
+	mutex_unlock(&clk_info.clock_lock);
+
+	if (update_clock && gpex_pm_get_status(true))
+		return gpex_clock_set(target_clk);
+
+	return 0;
+}
+
 int gpex_clock_prepare_runtime_off(void)
 {
 	gpex_clock_update_time_in_state(clk_info.cur_clock);
@@ -415,7 +520,6 @@ int gpex_clock_lock_clock(gpex_clock_lock_cmd_t lock_command, gpex_clock_lock_ty
 			  int clock)
 {
 	int i;
-	bool dirty = false;
 	unsigned long flags;
 	int max_lock_clk = 0;
 	int valid_clock = 0;
@@ -514,19 +618,7 @@ int gpex_clock_lock_clock(gpex_clock_lock_cmd_t lock_command, gpex_clock_lock_ty
 	case GPU_CLOCK_MAX_UNLOCK:
 		gpex_dvfs_spin_lock(&flags);
 		clk_info.user_max_lock[lock_type] = 0;
-		clk_info.max_lock = gpex_clock_get_max_clock();
-
-		for (i = 0; i < NUMBER_LOCK; i++) {
-			if (clk_info.user_max_lock[i] > 0) {
-				dirty = true;
-				clk_info.max_lock =
-					MIN(clk_info.user_max_lock[i], clk_info.max_lock);
-			}
-		}
-
-		if (!dirty)
-			clk_info.max_lock = 0;
-
+		gpex_clock_recompute_max_lock_locked();
 		gpex_dvfs_spin_unlock(&flags);
 		GPU_LOG_DETAILED(MALI_EXYNOS_DEBUG, LSI_GPU_MAX_LOCK, lock_type, clock,
 				 "unlock max clk\n");
@@ -534,19 +626,7 @@ int gpex_clock_lock_clock(gpex_clock_lock_cmd_t lock_command, gpex_clock_lock_ty
 	case GPU_CLOCK_MIN_UNLOCK:
 		gpex_dvfs_spin_lock(&flags);
 		clk_info.user_min_lock[lock_type] = 0;
-		clk_info.min_lock = gpex_clock_get_min_clock();
-
-		for (i = 0; i < NUMBER_LOCK; i++) {
-			if (clk_info.user_min_lock[i] > 0) {
-				dirty = true;
-				clk_info.min_lock =
-					MAX(clk_info.user_min_lock[i], clk_info.min_lock);
-			}
-		}
-
-		if (!dirty)
-			clk_info.min_lock = 0;
-
+		gpex_clock_recompute_min_lock_locked();
 		gpex_dvfs_spin_unlock(&flags);
 		GPU_LOG_DETAILED(MALI_EXYNOS_DEBUG, LSI_GPU_MIN_LOCK, lock_type, clock,
 				 "unlock min clk\n");
