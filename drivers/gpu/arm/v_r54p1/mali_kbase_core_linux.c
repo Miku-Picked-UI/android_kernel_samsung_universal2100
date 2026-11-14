@@ -78,6 +78,7 @@
 #endif
 
 #include <linux/module.h>
+#include <linux/trace_events.h>
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/kernel.h>
@@ -6200,6 +6201,7 @@ static int __init kbase_driver_init(void)
 	    strcmp(mali_selected_version, "r54p1") != 0) {
 		pr_info("mali_kbase_r54p1: not selected (requested=%s), skipping\n",
 			mali_selected_version);
+		ftrace_remove_module_events(THIS_MODULE);
 		return 0;
 	}
 
