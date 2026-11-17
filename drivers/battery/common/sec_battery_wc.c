@@ -642,10 +642,16 @@ void sec_bat_wireless_vout_cntl(struct sec_battery_info *battery, int vout_now)
 
 #if defined(CONFIG_WIRELESS_TX_MODE)
 #if !defined(CONFIG_SEC_FACTORY)
+static int is_5v_charger(struct sec_battery_info *battery);
+
 static void sec_bat_check_tx_battery_drain(struct sec_battery_info *battery)
 {
+	/*
+	 * Miku-Picked UI: TX may also run from a 5V-only source now, which can't
+	 * always cover TX plus the phone, so stop there at the cut-off too.
+	 */
 	if (battery->capacity <= battery->pdata->tx_stop_capacity &&
-		is_nocharge_type(battery->cable_type)) {
+		(is_nocharge_type(battery->cable_type) || is_5v_charger(battery))) {
 		pr_info("@Tx_Mode %s: battery level is drained, TX mode should turn off\n", __func__);
 		/* set tx event */
 		sec_bat_set_tx_event(battery, BATT_TX_EVENT_WIRELESS_TX_SOC_DRAIN, BATT_TX_EVENT_WIRELESS_TX_SOC_DRAIN);

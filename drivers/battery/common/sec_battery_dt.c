@@ -2019,7 +2019,18 @@ int sec_bat_parse_dt(struct device *dev,
 		pr_err("%s: tx mfc iout lcd on is Empty. set %d\n", __func__, pdata->tx_mfc_iout_lcd_on);
 	}
 
-	pdata->tx_5v_disable = of_property_read_bool(np, "battery,tx_5v_disable");
+	/*
+	 * Miku-Picked UI: keep Wireless PowerShare working while a 5V-only source
+	 * (a PC port or a non-fast charger) is plugged in. The board DT sets
+	 * battery,tx_5v_disable, which refuses TX on such a source and turns a
+	 * running TX off as soon as one is attached. The driver's 5V TX path
+	 * (tx_minduty_5V, charge current limited while TX runs) still covers it,
+	 * whatever the cable can't supply comes from the battery, and the
+	 * wc_tx_stop_capacity cut-off still applies.
+	 */
+	pdata->tx_5v_disable = false;
+	if (of_property_read_bool(np, "battery,tx_5v_disable"))
+		pr_info("%s: ignoring battery,tx_5v_disable\n", __func__);
 	pr_info("%s: 5V TA power sharing is %s.\n", __func__,
 		pdata->tx_5v_disable ? "Disabled" : "Enabled");
 
